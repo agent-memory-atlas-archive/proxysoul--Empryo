@@ -195,6 +195,25 @@ const srcKeys = new Set(Object.keys(src));
 }
 
 /**
+ * Dashes are a house-style decision, so enforce them where the product copy is
+ * authored: en.json. Translations come from github.com/proxysoul/soulforge and
+ * are pulled back into this repository; applying this rule to them would reject
+ * correct grammar and punish faithful translators. Russian requires the em dash
+ * for a zero copula (`Москва — столица`), while French uses spaced dashes for
+ * incises.
+ */
+{
+  const dash = /[\u2013\u2014]/;
+  const bad = Object.entries(src).filter(([, v]) => typeof v === "string" && dash.test(v));
+  if (bad.length > 0) {
+    console.log(`\n${SOURCE} carries ${bad.length} en or em dash${bad.length === 1 ? "" : "es"}:`);
+    for (const [k, v] of bad.slice(0, 20)) console.log(`  ${k}: ${v}`);
+    console.log("Use a colon, a comma or a full stop instead.");
+    process.exit(1);
+  }
+}
+
+/**
  * Shifted catalog — the failure behind #197.
  *
  * Extractor keys are `area.slug(text)`, so English text normally slugs back to

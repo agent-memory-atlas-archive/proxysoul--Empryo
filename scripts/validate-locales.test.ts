@@ -28,9 +28,12 @@ const EN = {
 };
 
 /** Run the gate over a throwaway locale tree. */
-function gate(locale: Record<string, unknown>): { code: number; out: string } {
+function gate(
+  locale: Record<string, unknown>,
+  source: Record<string, unknown> = EN,
+): { code: number; out: string } {
   const dir = mkdtempSync(join(tmpdir(), "empryo-locales-"));
-  writeFileSync(join(dir, "en.json"), JSON.stringify(EN));
+  writeFileSync(join(dir, "en.json"), JSON.stringify(source));
   writeFileSync(join(dir, "zz.json"), JSON.stringify(locale));
   const proc = Bun.spawnSync(["bun", SCRIPT], {
     env: { ...process.env, LOCALES_DIR: dir },
@@ -51,6 +54,29 @@ describe("locale gate", () => {
     });
     expect(code).toBe(0);
     expect(out).toContain("ok");
+  });
+
+  test("refuses an em dash in the English source", () => {
+    const { code, out } = gate({}, { ...EN, "common.action.cancel": "Cancel\u2014now" });
+    expect(code).not.toBe(0);
+    expect(out).toContain("common.action.cancel");
+    expect(out).toContain("colon, a comma or a full stop");
+  });
+
+  test("refuses an en dash in the English source", () => {
+    const { code, out } = gate({}, { ...EN, "common.action.cancel": "Cancel\u2013now" });
+    expect(code).not.toBe(0);
+    expect(out).toContain("common.action.cancel");
+  });
+
+  test("accepts a hyphen and middle dot in the English source", () => {
+    const { code } = gate({}, { ...EN, "common.action.cancel": "Cancel-now \u00b7 later" });
+    expect(code).toBe(0);
+  });
+
+  test("accepts an em dash in a translation", () => {
+    const { code } = gate({ "common.action.cancel": "Москва \u2014 столица" });
+    expect(code).toBe(0);
   });
 
   test("accepts right-to-left text without explicit overrides", () => {
