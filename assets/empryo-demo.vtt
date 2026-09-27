@@ -1,0 +1,33 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:02.400
+Empryo. Knows your code by heart.
+
+00:00:02.900 --> 00:00:07.900
+Desktop app. It maps your repo first.
+Files, symbols and imports, ranked. 171 files import loader.ts.
+
+00:00:08.400 --> 00:00:13.400
+Terminal app. It knows what an edit will touch.
+186 files depend on tokens.ts, and themes.md usually changes with it.
+
+00:00:13.900 --> 00:00:19.300
+Terminal app. It searches the map, then reads.
+One Genome search, 2 hits, then 24 lines of loader.ts instead of the whole file.
+
+00:00:19.800 --> 00:00:25.600
+Desktop app. Every edit lands as a diff.
+Then it runs the tests for the code it just changed.
+
+00:00:26.100 --> 00:00:31.500
+Terminal app. Same agent in your terminal.
+The diff, plus the test file that usually changes with loader.ts.
+
+00:00:32.000 --> 00:00:39.000
+Knows your code by heart.
+Edits TypeScript and JavaScript by symbol, through the syntax tree.
+Asks language servers for definitions, references and callers.
+Remembers decisions and gotchas, per project.
+Desktop app, terminal, or headless in scripts and CI.
+Install: curl -fsSL https://empryo.com/install.sh | bash
+Docs: empryo.com/docs

@@ -3,7 +3,7 @@
 <picture>
   <source media="(prefers-reduced-motion: reduce) and (prefers-color-scheme: dark)" srcset="assets/empryo-mote-dark.svg" />
   <source media="(prefers-reduced-motion: reduce)" srcset="assets/empryo-mote-light.svg" />
-  <source media="(prefers-color-scheme: dark)" srcset="assets/epryo-mote-dark-normal.gif" />
+  <source media="(prefers-color-scheme: dark)" srcset="assets/empryo-mote-dark-normal.gif" />
   <source media="(prefers-color-scheme: light)" srcset="assets/empryo-mote-light-normal.gif" />
   <img src="assets/empryo-mote-light-normal.gif" width="120" height="120" alt="Mote, the Empryo mascot" />
 </picture>
@@ -24,6 +24,21 @@ Knows your code by heart.
 </picture>
 
 </div>
+
+<details>
+<summary>Watch the demo</summary>
+
+<picture>
+  <source media="(prefers-reduced-motion: reduce) and (prefers-color-scheme: dark)" srcset="assets/empryo-demo-still-dark.webp" />
+  <source media="(prefers-reduced-motion: reduce)" srcset="assets/empryo-demo-still-light.webp" />
+  <source media="(prefers-color-scheme: dark)" srcset="assets/empryo-demo-dark.webp" />
+  <source media="(prefers-color-scheme: light)" srcset="assets/empryo-demo-light.webp" />
+  <img alt="Empryo maps a repository, follows its connections, edits code and shows the diff in desktop and terminal views" src="assets/empryo-demo-light.webp" width="880" />
+</picture>
+
+[Full video, dark](assets/empryo-demo-dark.mp4) · [Full video, light](assets/empryo-demo-light.mp4)
+
+</details>
 
 ## Install
 
@@ -67,9 +82,15 @@ One agent, the same map and memory, wherever you run it.
 </picture>
 </div>
 
-## Open core
+## Public core and engine
 
-This repository is the core and engine Empryo runs on, open source as SoulForge under its [license](LICENSE). The desktop app, the new surfaces and the newest features are Empryo's.
+This repository contains the public SoulForge v2 core and engine code under its [existing license](LICENSE). It is not the full source of Empryo v3; the current desktop app, new surfaces and newest features are developed privately.
+
+## Empryo v3 usage
+
+Empryo v3 is free for personal and internal business use, including company development, paid client work and headless CI. You can sell the work you create with it. Selling, hosting, wrapping or bundling Empryo itself as a commercial offering requires the owner's explicit prior written permission in a separate commercial license. Contact **empryo@proxysoul.com**.
+
+The [Empryo v3 license](EMPRYO_V3_LICENSE.md) applies only to distributions supplied under those terms. It does not replace this repository's [SoulForge license](LICENSE), revoke earlier grants or change their existing conversion rights.
 
 Bugs go to [Issues](https://github.com/proxysoul/soulforge/issues), ideas to [Discussions](https://github.com/proxysoul/soulforge/discussions).
 
