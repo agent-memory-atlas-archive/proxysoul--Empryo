@@ -1,9 +1,3 @@
-/**
- * The locale gate is a security control, and a security control that has never
- * been shown a hostile input is a wish. Each case below is a real thing a
- * translation pull request could contain, built from escape sequences so this
- * file stays readable in a diff.
- */
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -11,23 +5,17 @@ import { join } from "node:path";
 
 const SCRIPT = join(import.meta.dir, "validate-locales.ts");
 
-/** English source used by every case. Small, with one plural and one placeholder. */
 const EN = {
   "common.action.cancel": "Cancel",
   "common.label.files": "Files",
   "session.steps": "{count, plural, one {# step} other {# steps}}",
-  // A plural whose ONE branch is a bare word. `{step}` here is a branch BODY,
-  // not a placeholder — the case that made the gate demand a `{step}` no
-  // translation could supply.
   "session.one-or-many": "{count, plural, one {step} other {# steps}}",
   "session.nested": "{count, plural, one {# file in {dir}} other {# files in {dir}}}",
   "session.greeting": "Welcome back, {name}",
-  // A genuinely two-paragraph message: its translation needs newlines too.
   "session.confirm": "Discard these changes?\n\nThis cannot be undone.",
   "common.state.ready": "Ready",
 };
 
-/** Run the gate over a throwaway locale tree. */
 function gate(
   locale: Record<string, unknown>,
   source: Record<string, unknown> = EN,
@@ -80,7 +68,6 @@ describe("locale gate", () => {
   });
 
   test("accepts right-to-left text without explicit overrides", () => {
-    // Arabic derives direction from its own letters; no control marks needed.
     const { code } = gate({ "common.action.cancel": "إلغاء", "common.label.files": "الملفات" });
     expect(code).toBe(0);
   });
@@ -141,8 +128,6 @@ describe("locale gate", () => {
   });
 
   test("a plural branch body is not a placeholder", () => {
-    // Translating the branch bodies is the whole job; a gate that reads them as
-    // required placeholders rejects every correct translation of this shape.
     const { code, out } = gate({
       "session.one-or-many": "{count, plural, zero {لا خطوات} one {خطوة} two {خطوتان} few {# خطوات} many {# خطوة} other {# خطوة}}",
     });
@@ -195,18 +180,11 @@ describe("locale gate", () => {
   });
 
   test("reports coverage so a partial translation reads as partial", () => {
-    // The fraction, not a fixed percentage: the English fixture grows whenever
-    // a new shape needs covering, and a hardcoded number turns that into a
-    // failing test about nothing.
     const { out } = gate({ "common.action.cancel": "取消" });
     expect(out).toMatch(new RegExp(`\\(1/${Object.keys(EN).length}\\)`));
     expect(out).toMatch(/% translated/);
   });
 
-  /**
-   * Invisible-character classes the first version of this gate let straight
-   * through. Each renders as nothing, so each is a channel that survives review.
-   */
   test("refuses Unicode Tag characters, the ASCII-smuggling block", () => {
     const smuggled = `Cancel${String.fromCodePoint(0xe0001, 0xe0041, 0xe0042)}`;
     const { code, out } = gate({ "common.action.cancel": smuggled });
@@ -245,10 +223,9 @@ describe("locale gate", () => {
   });
 
   test("refuses a file too large to be a translation, before parsing it", () => {
-    // 5 MB of a valid-looking value: the size check must fire, not JSON.parse.
     const { code, out } = gate({ "common.action.cancel": "x".repeat(5 * 1024 * 1024) });
     expect(code).not.toBe(0);
     expect(out).toContain("size");
-    expect(out).not.toContain("length"); // never got as far as the per-value rule
+    expect(out).not.toContain("length");
   });
 });

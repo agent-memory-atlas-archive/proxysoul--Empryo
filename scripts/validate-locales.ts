@@ -1,40 +1,9 @@
 #!/usr/bin/env bun
-/**
- * Locale gate — the only thing standing between a stranger's pull request and
- * the text this product paints into a terminal.
- *
- * Translations arrive from the public tracker. That makes every value in every
- * `locales/*.json` attacker-controlled input, and the surface it reaches is not
- * a sandbox: it is a TTY that interprets what it is handed. Each rule below
- * exists because of something a string can DO, not because of style.
- *
- *   bun scripts/validate-locales.ts            check every locale
- *   bun scripts/validate-locales.ts zh-CN      check one
- *
- * Exit 0 = safe to merge. Non-zero = do not merge.
- *
- * Every pattern below is written with `\u`/`\x` escapes rather than the literal
- * characters. A file that contains a raw ESC in order to test for raw ESC is a
- * file no reviewer can read and no diff can show honestly.
- */
 import { Glob } from "bun";
 
-/**
- * Directory holding the catalogs. Overridable so tests can point the gate at a
- * fixture tree instead of the shipped one — a security check nobody can run
- * against hostile input is a security check nobody trusts.
- */
 const DIR = process.env.LOCALES_DIR ?? "locales";
 const SOURCE = `${DIR}/en.json`;
-/** Longest a single value may be, in characters. Beyond this a "translation" is a payload. */
 const MAX_LEN = 400;
-/**
- * Largest a locale file may be, in bytes. `en.json` is ~90 KB at 1,850 keys; a
- * full translation in a verbose script might reach twice that. Anything past a
- * few megabytes is not a translation, and `JSON.parse` on a file that size
- * exhausts the CI runner before a single rule has run — a "check" that can be
- * knocked over by the thing it checks is not a check.
- */
 const MAX_FILE_BYTES = 4 * 1024 * 1024;
 
 type Catalog = Record<string, string>;
@@ -50,106 +19,100 @@ const problems: Problem[] = [];
 const note = (locale: string, key: string, rule: string, detail: string) =>
   problems.push({ locale, key, rule, detail });
 
-/**
- * Control characters and escape introducers.
- *
- * This is the rule that matters. A terminal does not print `ESC`, it OBEYS it.
- * A locale value carrying `OSC 52` writes the user's system clipboard; `OSC 0`
- * rewrites the window title; cursor-movement sequences repaint parts of the
- * screen the app believes it owns, which is enough to forge a confirmation
- * prompt. None of it is visible in a diff. All of it is refused.
- *
- * Covers C0 (\x00-\x1f), DEL (\x7f) and C1 (\x80-\x9f). Tab and newline are
- * refused too: a catalog value is a phrase, and neither belongs in one.
- */
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
 
-/**
- * Bidirectional overrides — the Trojan Source class.
- *
- * These reorder glyphs at render time, so what a reviewer reads and what a user
- * sees can be made to differ arbitrarily. Legitimate right-to-left text (Arabic,
- * Hebrew) needs NONE of them: the bidi algorithm derives direction from the
- * letters themselves. A translation that contains an explicit override is either
- * broken or hostile, and both answers are "reject".
- */
 const BIDI = /[\u202a-\u202e\u2066-\u2069]/;
 
-/**
- * Invisible formatting — characters that occupy no space and show in no diff.
- *
- * The bar here is not "does it look harmful", it is "can a reviewer see it".
- * Anything that renders as nothing can carry a payload through review: a
- * tracking beacon, an exfiltration marker, or text addressed to a model rather
- * than to a person. The Unicode Tag block (U+E0000-E007F) is the sharp one —
- * it encodes arbitrary ASCII as invisible code points and is the standard
- * vehicle for smuggling instructions into text an LLM will later read.
- *
- * `width.ts` already treats every one of these as zero-width. A character the
- * renderer knows is invisible and the gate does not is exactly the seam to
- * close.
- */
 const INVISIBLE =
   /[\u00ad\u061c\u180e\u200b-\u200f\u2028\u2029\u2060-\u2064\ufe00-\ufe0f\ufeff\ufff9-\ufffb]|[\u{e0000}-\u{e007f}]|[\u{e0100}-\u{e01ef}]/u;
 
-/** `{name}`, `{count, plural, …}` — the argument NAMES a message depends on. */
-function placeholders(pattern: string): Set<string> {
-  const names = new Set<string>();
-  walk(pattern, 0, pattern.length, names);
-  return names;
+interface Arg {
+  name: string;
+  type: string | null;
+  branches: string[];
 }
 
-/**
- * The argument names in `[from, to)`, counting only real arguments.
- *
- * A regex cannot do this. `{count, plural, one {image} other {# images}}` has
- * ONE argument — `count` — but `{image}` is a branch BODY, and it is spelled
- * exactly like a simple placeholder. A scanner that cannot tell them apart
- * demands an `{image}` the English never had, and rejects a correct
- * translation: the branch bodies are the words a translator is supposed to
- * replace. So parse: read an argument's name, and if it opens branches, walk
- * each body recursively — placeholders nested INSIDE a body are real and are
- * collected on the way through.
- */
-function walk(src: string, from: number, to: number, out: Set<string>): void {
+const BRANCHING = new Set(["plural", "select", "selectordinal"]);
+
+interface Parsed {
+  args: Arg[];
+  balanced: boolean;
+  badQuotes: string[];
+}
+
+function parse(pattern: string): Parsed {
+  const out: Parsed = { args: [], balanced: true, badQuotes: [] };
+  walk(pattern, 0, pattern.length, out);
+  return out;
+}
+
+function quoteEnd(src: string, i: number, to: number, out: Parsed): number {
+  if (src[i] !== "'") return -1;
+  const next = i + 1 < to ? src[i + 1] : undefined;
+  if (next === "'") return i + 2;
+  if (next !== "{" && next !== "}") return -1;
+  const close = src.indexOf("'", i + 2);
+  const open = close < 0 || close >= to;
+  const end = open ? to : close + 1;
+  const span = src.slice(i, end);
+  if (open || /\{\s*[A-Za-z_][A-Za-z0-9_]*\s*[,}]/.test(span)) out.badQuotes.push(span);
+  return end;
+}
+
+function walk(src: string, from: number, to: number, out: Parsed): void {
   let i = from;
   while (i < to) {
+    const quoted = quoteEnd(src, i, to, out);
+    if (quoted >= 0) {
+      i = quoted;
+      continue;
+    }
+    if (src[i] === "}") {
+      out.balanced = false;
+      i++;
+      continue;
+    }
     if (src[i] !== "{") {
       i++;
       continue;
     }
     const close = matching(src, i, to);
-    if (close < 0) return; // unbalanced: `balanced()` reports it on its own
+    if (close < 0) {
+      out.balanced = false;
+      return;
+    }
     const inner = src.slice(i + 1, close);
     const name = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*(,|$)/.exec(inner);
     if (!name) {
       i = close + 1;
       continue;
     }
-    out.add(name[1]!);
+    const arg: Arg = { name: name[1]!, type: null, branches: [] };
+    out.args.push(arg);
     if (name[2] === ",") {
-      // `{n, plural, one {…} other {…}}`. What follows the type is a list of
-      // `keyword {body}` pairs. Each BODY is a nested message — recurse INSIDE
-      // its braces, never over them: the braces belong to the branch, and
-      // treating them as an argument is what made `one {image}` demand an
-      // `{image}` placeholder the English never had.
-      let j = i + 1 + inner.indexOf(",");
+      const afterName = i + 1 + inner.indexOf(",") + 1;
+      const type = /^\s*([A-Za-z]+)/.exec(src.slice(afterName, close));
+      arg.type = type ? type[1]! : null;
+      let j = afterName;
+      let segment = afterName;
       while (j < close) {
         if (src[j] !== "{") {
           j++;
           continue;
         }
+        const keyword = /(\S+)\s*$/.exec(src.slice(segment, j));
+        if (keyword) arg.branches.push(keyword[1]!);
         const bodyEnd = matching(src, j, close);
         if (bodyEnd < 0) break;
         walk(src, j + 1, bodyEnd, out);
         j = bodyEnd + 1;
+        segment = j;
       }
     }
     i = close + 1;
   }
 }
 
-/** Index of the `}` closing the `{` at `open`, or -1. */
 function matching(src: string, open: number, to: number): number {
   let depth = 0;
   for (let i = open; i < to; i++) {
@@ -159,30 +122,17 @@ function matching(src: string, open: number, to: number): number {
   return -1;
 }
 
-/** Arguments used with a plural form, per pattern. */
-function pluralArgs(pattern: string): Set<string> {
-  const out = new Set<string>();
-  for (const m of pattern.matchAll(/\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*,\s*plural\b/g)) out.add(m[1]!);
+function argTypes(args: Arg[]): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const a of args) if (a.type !== null && !out.has(a.name)) out.set(a.name, a.type);
   return out;
 }
 
-function balanced(s: string): boolean {
-  let depth = 0;
-  for (const ch of s) {
-    if (ch === "{") depth++;
-    else if (ch === "}" && --depth < 0) return false;
-  }
-  return depth === 0;
-}
+const lineBreaks = (s: string): number => s.split("\n").length - 1;
 
 const src = (await Bun.file(SOURCE).json()) as Catalog;
 const srcKeys = new Set(Object.keys(src));
 
-// The catalog is plain text, not HTML. `nls()` returns a string that React
-// renders as a CHILD, and React decodes nothing there: an entity that reaches
-// en.json is an entity the user reads on screen ("Models &AMP; spend" once an
-// uppercase label gets hold of it — #184). The extractor decodes on the way in;
-// this is the gate that keeps a hand-edited or translator-supplied one out.
 {
   const entity = /&(?:amp|lt|gt|quot|apos|#\d+);/;
   const bad = Object.entries(src).filter(([, v]) => typeof v === "string" && entity.test(v));
@@ -194,14 +144,6 @@ const srcKeys = new Set(Object.keys(src));
   }
 }
 
-/**
- * Dashes are a house-style decision, so enforce them where the product copy is
- * authored: en.json. Translations come from github.com/proxysoul/soulforge and
- * are pulled back into this repository; applying this rule to them would reject
- * correct grammar and punish faithful translators. Russian requires the em dash
- * for a zero copula (`Москва — столица`), while French uses spaced dashes for
- * incises.
- */
 {
   const dash = /[\u2013\u2014]/;
   const bad = Object.entries(src).filter(([, v]) => typeof v === "string" && dash.test(v));
@@ -213,21 +155,6 @@ const srcKeys = new Set(Object.keys(src));
   }
 }
 
-/**
- * Shifted catalog — the failure behind #197.
- *
- * Extractor keys are `area.slug(text)`, so English text normally slugs back to
- * its own key. When the `--apply` codemod walks a table of short labels
- * (`{ off: "Off", none: "None", … }`) and lands each literal on its NEIGHBOUR's
- * key, every value stays valid English and every key stays wired — nothing else
- * in this gate notices. On screen the whole control renames itself: "medium"
- * paints as "High", "flex" paints as "Prio", and the toast disagrees with the
- * segment the user just clicked.
- *
- * The signature is a CHAIN: key A's text belongs to key B, and B's text belongs
- * to someone else too. A lone mismatch is a hand-written key or reworded copy,
- * so both ends must be wrong before this fails.
- */
 {
   const slug = (text: string): string =>
     text
@@ -240,7 +167,6 @@ const srcKeys = new Set(Object.keys(src));
       .join("-") || "text";
   const suffix = (key: string): string => key.slice(key.lastIndexOf(".") + 1);
   const areaOf = (key: string): string => key.slice(0, key.lastIndexOf("."));
-  /** The key this value's own text names, when that is not the key holding it. */
   const misplaced = (key: string): string | null => {
     const v = src[key];
     if (typeof v !== "string" || key.startsWith("command.")) return null;
@@ -261,13 +187,6 @@ const srcKeys = new Set(Object.keys(src));
   }
 }
 
-/**
- * `--allow-stale`: a key the source catalog no longer has is reported but does
- * not fail the run. Upstream (the PR gate) never passes this — a translation
- * must match the published en.json. The private tree passes it when embedding:
- * there en.json moves first and translations lag behind by design, and the
- * embed step drops unknown keys itself.
- */
 const allowStale = process.argv.includes("--allow-stale");
 const only = process.argv.slice(2).find((a) => !a.startsWith("--"));
 const targets: string[] = [];
@@ -302,11 +221,11 @@ for (const tag of targets) {
     continue;
   }
 
-  // A tag we cannot construct a formatter for cannot pluralise or format numbers.
   try {
     new Intl.PluralRules(tag);
-  } catch {
-    note(tag, "-", "tag", `"${tag}" is not a usable BCP-47 language tag`);
+  } catch (err) {
+    const why = err instanceof Error ? err.message : String(err);
+    note(tag, "-", "tag", `"${tag}" is not a usable BCP-47 language tag: ${why}`);
   }
 
   for (const [key, value] of Object.entries(cat)) {
@@ -319,15 +238,14 @@ for (const tag of targets) {
       continue;
     }
 
-    // A newline is not an escape. Some English messages are genuinely two
-    // paragraphs — a confirm body with the diff stat between them — and their
-    // translations have to be too. The runtime agrees: `scrub()` in
-    // packages/base/src/i18n/index.ts strips the control range but leaves
-    // \n and \t alone. So refuse a newline only where the English has none,
-    // which still catches a pasted terminal capture smuggling one in.
-    const stripped = src[key]!.includes("\n") ? value.replace(/\n/g, "") : value;
+    const srcBreaks = lineBreaks(src[key]!);
+    const gotBreaks = lineBreaks(value);
+    const stripped = srcBreaks > 0 ? value.replace(/\n/g, "") : value;
     if (CONTROL.test(stripped)) {
       note(tag, key, "control-char", "contains an escape or control character");
+    }
+    if (srcBreaks > 0 && gotBreaks > srcBreaks) {
+      note(tag, key, "newline", `${gotBreaks} line breaks, the English has ${srcBreaks}`);
     }
     if (BIDI.test(value)) {
       note(tag, key, "bidi-override", "contains an explicit bidi override");
@@ -335,38 +253,49 @@ for (const tag of targets) {
     if (INVISIBLE.test(value)) {
       note(tag, key, "invisible", "contains zero-width or invisible formatting");
     }
-    // A command NAME becomes something a user types after `/`: one token, no
-    // slash, no whitespace, nothing a shell or the command parser would split.
     if (/^command\..*\.name$/.test(key) && !/^[\p{L}\p{M}\p{N}_-]{1,32}$/u.test(value)) {
       note(tag, key, "command-name", "must be one word (letters, digits, - _), no slash");
     }
-    if (value.length > MAX_LEN) {
-      note(tag, key, "length", `${value.length} chars, limit is ${MAX_LEN}`);
-    }
-    if (!balanced(value)) {
-      note(tag, key, "braces", "unbalanced { }");
+    const limit = Math.max(MAX_LEN, 2 * [...src[key]!].length);
+    const length = [...value].length;
+    if (length > limit) {
+      note(tag, key, "length", `${length} chars, limit is ${limit}`);
     }
 
-    const want = placeholders(src[key]!);
-    const got = placeholders(value);
+    const source = parse(src[key]!);
+    const parsed = parse(value);
+    if (!parsed.balanced) {
+      note(tag, key, "braces", "unbalanced { }");
+    }
+    for (const span of parsed.badQuotes) {
+      if (source.badQuotes.includes(span)) continue;
+      note(
+        tag,
+        key,
+        "quote",
+        `${JSON.stringify(span)} is ICU quoting and renders as literal text; write \u2019 or '' for an apostrophe`,
+      );
+    }
+
+    const want = new Set(source.args.map((a) => a.name));
+    const got = new Set(parsed.args.map((a) => a.name));
     for (const p of want) if (!got.has(p)) note(tag, key, "placeholder", `missing {${p}}`);
     for (const p of got) if (!want.has(p)) note(tag, key, "placeholder", `unexpected {${p}}`);
 
-    // A plural argument in English must stay a plural argument: dropping the
-    // wrapper turns `{count, plural, …}` into the literal word "count".
-    for (const p of pluralArgs(src[key]!)) {
-      if (!pluralArgs(value).has(p)) note(tag, key, "plural", `{${p}} lost its plural form`);
+    const gotTypes = argTypes(parsed.args);
+    for (const [p, type] of argTypes(source.args)) {
+      if (got.has(p) && gotTypes.get(p) !== type) {
+        note(tag, key, "arg-type", `{${p}} lost its ${type} form`);
+      }
     }
-    // Every plural needs an `other` branch — it is the only category that is
-    // mandatory in every language, and the runtime falls back to it.
-    if (pluralArgs(value).size > 0 && !/\bother\s*\{/.test(value)) {
-      note(tag, key, "plural", "plural is missing its `other` branch");
+    for (const a of parsed.args) {
+      if (a.type !== null && BRANCHING.has(a.type) && !a.branches.includes("other")) {
+        note(tag, key, "other-branch", `{${a.name}, ${a.type}} is missing its \`other\` branch`);
+      }
     }
   }
 
   const have = Object.keys(cat).filter((k) => srcKeys.has(k)).length;
-  // Round DOWN, and never round a non-empty translation to 0: "0% translated"
-  // next to five real translated strings reads as a failure rather than a start.
   const exact = (have / srcKeys.size) * 100;
   const pct = have > 0 ? Math.max(1, Math.floor(exact)) : 0;
   const mine = problems.filter((p) => p.locale === tag);
